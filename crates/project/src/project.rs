@@ -74,7 +74,7 @@ use debugger::{
     session::Session,
 };
 
-pub use environment::ProjectEnvironment;
+pub use environment::{CliEnvironmentRequest, ProjectEnvironment};
 
 use futures::{
     StreamExt,
@@ -110,7 +110,9 @@ pub use prettier_store::PrettierStore;
 use project_settings::{ProjectSettings, SettingsObserver, SettingsObserverEvent};
 #[cfg(target_os = "windows")]
 use remote::wsl_path_to_windows_path;
-use remote::{RemoteClient, RemoteConnectionOptions, same_remote_connection_identity};
+use remote::{
+    RemoteClient, RemoteConnectionOptions, RemoteConnectionTarget, same_remote_connection_identity,
+};
 use rpc::{
     AnyProtoClient, ErrorCode,
     proto::{LanguageServerPromptResponse, REMOTE_SERVER_PROJECT_ID},
@@ -2312,26 +2314,6 @@ impl Project {
         self.environment.read(cx).get_cli_environment()
     }
 
-    pub fn set_cli_environment_if_unset(
-        &mut self,
-        cli_environment: HashMap<String, String>,
-        cx: &mut Context<Self>,
-    ) {
-        self.environment.update(cx, |environment, _| {
-            environment.set_cli_environment_if_unset(cli_environment)
-        });
-    }
-
-    pub fn set_cli_environment_gate(
-        &mut self,
-        gate: impl Future<Output = ()> + 'static,
-        cx: &mut Context<Self>,
-    ) {
-        self.environment.update(cx, |environment, cx| {
-            environment.set_cli_environment_gate(gate, cx)
-        });
-    }
-
     #[inline]
     pub fn peek_environment_error<'a>(&'a self, cx: &'a App) -> Option<&'a String> {
         self.environment.read(cx).peek_environment_error()
@@ -3048,6 +3030,9 @@ impl Project {
             *sharing_has_stopped = true;
             self.client_subscriptions.clear();
             self.collaborators.clear();
+            self.breakpoint_store.update(cx, |breakpoint_store, _| {
+                breakpoint_store.set_collaborators([])
+            });
             self.worktree_store.update(cx, |store, cx| {
                 store.disconnected_from_host(cx);
             });
@@ -5127,6 +5112,28 @@ impl Project {
         }
     }
 
+    pub fn abs_path_exists(&self, path: &Path, cx: &App) -> Task<Result<bool>> {
+        if self.is_local() {
+            let fs = self.fs.clone();
+            let path = path.to_path_buf();
+            cx.background_spawn(async move { Ok(fs.metadata(&path).await?.is_some()) })
+        } else if let Some(remote_client) = self.remote_client.as_ref() {
+            let request = remote_client
+                .read(cx)
+                .proto_client()
+                .request(proto::GetPathMetadata {
+                    project_id: REMOTE_SERVER_PROJECT_ID,
+                    path: path.to_string_lossy().into_owned(),
+                    canonicalize: false,
+                });
+            cx.background_spawn(async move { Ok(request.await?.exists) })
+        } else {
+            Task::ready(Err(anyhow!(
+                "cannot check paths of a collaborative project"
+            )))
+        }
+    }
+
     pub fn resolve_abs_path(&self, path: &str, cx: &App) -> Task<Option<ResolvedPath>> {
         if self.is_local() {
             let expanded = PathBuf::from(shellexpand::tilde(&path).into_owned());
@@ -5600,7 +5607,10 @@ impl Project {
             this.buffer_store.update(cx, |buffer_store, _| {
                 buffer_store.forget_shared_buffers_for(&collaborator.peer_id);
             });
-            this.breakpoint_store.read(cx).broadcast();
+            this.breakpoint_store.update(cx, |breakpoint_store, _| {
+                breakpoint_store.collaborator_added(collaborator.peer_id);
+                breakpoint_store.broadcast();
+            });
             cx.emit(Event::CollaboratorJoined(collaborator.peer_id));
             this.collaborators
                 .insert(collaborator.peer_id, collaborator);
@@ -5633,6 +5643,9 @@ impl Project {
             log::info!("peer {} became {}", old_peer_id, new_peer_id,);
             this.buffer_store.update(cx, |buffer_store, _| {
                 buffer_store.update_peer_id(&old_peer_id, new_peer_id)
+            });
+            this.breakpoint_store.update(cx, |breakpoint_store, _| {
+                breakpoint_store.collaborator_renamed(old_peer_id, new_peer_id)
             });
 
             if is_host {
@@ -5668,6 +5681,9 @@ impl Project {
                 for buffer in buffer_store.buffers() {
                     buffer.update(cx, |buffer, cx| buffer.remove_peer(replica_id, cx));
                 }
+            });
+            this.breakpoint_store.update(cx, |breakpoint_store, _| {
+                breakpoint_store.collaborator_removed(peer_id)
             });
             this.git_store.update(cx, |git_store, _| {
                 git_store.forget_shared_diffs_for(&peer_id);
@@ -6514,6 +6530,9 @@ impl Project {
                 cx.emit(Event::CollaboratorLeft(*old_peer_id));
             }
         }
+        self.breakpoint_store.update(cx, |breakpoint_store, _| {
+            breakpoint_store.set_collaborators(collaborators.keys().copied())
+        });
         self.collaborators = collaborators;
         Ok(())
     }
@@ -6739,11 +6758,26 @@ impl Project {
 ///
 /// Paths are mapped to their main worktree path first so we can group
 /// workspaces by main repos.
-#[derive(PartialEq, Eq, Hash, Clone, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ProjectGroupKey {
     /// The paths of the main worktrees for this project group.
     paths: PathList,
     host: Option<RemoteConnectionOptions>,
+}
+
+impl PartialEq for ProjectGroupKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.paths == other.paths && self.host_target() == other.host_target()
+    }
+}
+
+impl Eq for ProjectGroupKey {}
+
+impl std::hash::Hash for ProjectGroupKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.paths.hash(state);
+        self.host_target().hash(state);
+    }
 }
 
 impl ProjectGroupKey {
@@ -6810,6 +6844,10 @@ impl ProjectGroupKey {
     pub fn matches(&self, other: &ProjectGroupKey) -> bool {
         self.paths == other.paths
             && same_remote_connection_identity(self.host.as_ref(), other.host.as_ref())
+    }
+
+    fn host_target(&self) -> Option<RemoteConnectionTarget> {
+        self.host.as_ref().map(RemoteConnectionTarget::from)
     }
 }
 

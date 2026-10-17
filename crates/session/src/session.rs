@@ -1,4 +1,4 @@
-use db::kvp::KeyValueStore;
+use db::{anyhow::Context as _, kvp::KeyValueStore};
 use gpui::{App, AppContext as _, Context, Subscription, Task, WindowId};
 use util::ResultExt;
 
@@ -6,7 +6,7 @@ pub struct Session {
     session_id: String,
     old_session_id: Option<String>,
     old_window_stack: Option<(String, Vec<WindowId>)>,
-    restorable_session_ids: Vec<String>,
+    restorable_session_ids: Option<Vec<String>>,
 }
 
 const SESSION_ID_KEY: &str = "session_id";
@@ -23,32 +23,40 @@ impl Session {
     }
 
     pub async fn new(session_id: String, db: KeyValueStore) -> Self {
-        let old_session_id = Self::stored_session_id(&db);
-        let restorable_session_ids = stored_restorable_session_ids(&db, old_session_id.as_deref());
-        let next_restorable_session_ids = std::iter::once(session_id.clone())
-            .chain(restorable_session_ids.iter().cloned())
-            .collect::<Vec<_>>();
+        let metadata = db
+            .write({
+                let session_id = session_id.clone();
+                move |connection| {
+                    connection.with_savepoint("session_metadata", || {
+                        let old_session_id = db::kvp::read_value(connection, SESSION_ID_KEY)?;
+                        let restorable_session_ids = restorable_session_ids_after(
+                            db::kvp::read_value(connection, RESTORABLE_SESSION_IDS_KEY)?,
+                            old_session_id.as_deref(),
+                        );
+                        let next_restorable_session_ids = std::iter::once(session_id.clone())
+                            .chain(restorable_session_ids.iter().cloned())
+                            .collect::<Vec<_>>();
+                        db::kvp::write_value(connection, SESSION_ID_KEY, &session_id)?;
+                        db::kvp::write_value(
+                            connection,
+                            RESTORABLE_SESSION_IDS_KEY,
+                            &serialize_restorable_session_ids(&next_restorable_session_ids),
+                        )?;
+                        Ok((old_session_id, restorable_session_ids))
+                    })
+                }
+            })
+            .await
+            .context("Failed to update the session metadata")
+            .log_err();
+        let (old_session_id, restorable_session_ids) = match metadata {
+            Some((old_session_id, restorable_session_ids)) => {
+                (old_session_id, Some(restorable_session_ids))
+            }
+            None => (None, None),
+        };
 
-        db.write_kvps(vec![
-            (SESSION_ID_KEY.to_string(), session_id.clone()),
-            (
-                RESTORABLE_SESSION_IDS_KEY.to_string(),
-                serialize_restorable_session_ids(&next_restorable_session_ids),
-            ),
-        ])
-        .await
-        .log_err();
-
-        let old_window_stack =
-            stored_window_stack(&db, old_session_id.as_deref()).map(|(session_id, window_ids)| {
-                (
-                    session_id,
-                    window_ids
-                        .into_iter()
-                        .map(WindowId::from)
-                        .collect::<Vec<_>>(),
-                )
-            });
+        let old_window_stack = stored_window_stack(&db, old_session_id.as_deref());
 
         Self {
             session_id,
@@ -64,7 +72,7 @@ impl Session {
             session_id: uuid::Uuid::new_v4().to_string(),
             old_session_id: None,
             old_window_stack: None,
-            restorable_session_ids: Vec::new(),
+            restorable_session_ids: Some(Vec::new()),
         }
     }
 
@@ -72,7 +80,7 @@ impl Session {
     pub fn test_with_old_session(old_session_id: String) -> Self {
         Self {
             session_id: uuid::Uuid::new_v4().to_string(),
-            restorable_session_ids: vec![old_session_id.clone()],
+            restorable_session_ids: Some(vec![old_session_id.clone()]),
             old_session_id: Some(old_session_id),
             old_window_stack: None,
         }
@@ -82,8 +90,8 @@ impl Session {
         &self.session_id
     }
 
-    pub fn restorable_session_ids(&self) -> &[String] {
-        &self.restorable_session_ids
+    pub fn restorable_session_ids(&self) -> Option<&[String]> {
+        self.restorable_session_ids.as_deref()
     }
 }
 
@@ -153,8 +161,8 @@ impl AppSession {
         self.session.old_session_id.as_deref()
     }
 
-    pub fn restorable_session_ids(&self) -> &[String] {
-        &self.session.restorable_session_ids
+    pub fn restorable_session_ids(&self) -> Option<&[String]> {
+        self.session.restorable_session_ids()
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -167,9 +175,17 @@ impl AppSession {
         let previous_session_id = self.session.session_id.clone();
         self.session = Session {
             session_id: uuid::Uuid::new_v4().to_string(),
-            restorable_session_ids: std::iter::once(previous_session_id.clone())
-                .chain(self.session.restorable_session_ids.iter().cloned())
-                .collect(),
+            restorable_session_ids: Some(
+                std::iter::once(previous_session_id.clone())
+                    .chain(
+                        self.session
+                            .restorable_session_ids
+                            .iter()
+                            .flatten()
+                            .cloned(),
+                    )
+                    .collect(),
+            ),
             old_session_id: Some(previous_session_id),
             old_window_stack: None,
         };
@@ -189,40 +205,35 @@ fn window_stack(cx: &App) -> Option<Vec<u64>> {
     )
 }
 
-fn stored_restorable_session_ids(db: &KeyValueStore, old_session_id: Option<&str>) -> Vec<String> {
+fn restorable_session_ids_after(
+    stored_json: Option<String>,
+    old_session_id: Option<&str>,
+) -> Vec<String> {
     let Some(old_session_id) = old_session_id else {
         return Vec::new();
     };
-    let stored = db
-        .read_kvp(RESTORABLE_SESSION_IDS_KEY)
-        .ok()
-        .flatten()
+    stored_json
         .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok())
-        .unwrap_or_default();
-    if !stored.iter().any(|session_id| session_id == old_session_id) {
-        return vec![old_session_id.to_owned()];
-    }
-    std::iter::once(old_session_id.to_owned())
-        .chain(
-            stored
-                .into_iter()
-                .filter(|session_id| session_id != old_session_id),
-        )
-        .collect()
+        .filter(|stored| stored.first().is_some_and(|first| first == old_session_id))
+        .unwrap_or_else(|| vec![old_session_id.to_owned()])
 }
 
 fn stored_window_stack(
     db: &KeyValueStore,
     legacy_session_id: Option<&str>,
-) -> Option<(String, Vec<u64>)> {
+) -> Option<(String, Vec<WindowId>)> {
     let json = db.read_kvp(SESSION_WINDOW_STACK_KEY).ok().flatten()?;
-    match serde_json::from_str::<(String, Vec<u64>)>(&json) {
-        Ok(window_stack) => Some(window_stack),
-        Err(_) => Some((
+    let (session_id, window_ids) = match serde_json::from_str::<(String, Vec<u64>)>(&json) {
+        Ok(window_stack) => window_stack,
+        Err(_) => (
             legacy_session_id?.to_owned(),
             serde_json::from_str::<Vec<u64>>(&json).ok()?,
-        )),
-    }
+        ),
+    };
+    Some((
+        session_id,
+        window_ids.into_iter().map(WindowId::from).collect(),
+    ))
 }
 
 async fn store_window_stack(db: KeyValueStore, session_id: &str, windows: &[u64]) {
@@ -256,12 +267,7 @@ mod tests {
 
             let mut window_stacks = Vec::new();
             for (stack_session_id, next_session_id) in [("other", "sixth"), ("sixth", "seventh")] {
-                store_window_stack(
-                    db.clone(),
-                    stack_session_id,
-                    &[WindowId::from(7u64).as_u64()],
-                )
-                .await;
+                store_window_stack(db.clone(), stack_session_id, &[7]).await;
                 window_stacks.push(
                     Session::new(next_session_id.to_owned(), db.clone())
                         .await
@@ -269,12 +275,12 @@ mod tests {
                 );
             }
 
-            let ids = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+            let ids = |ids: &[&str]| Some(ids.iter().map(|id| id.to_string()).collect::<Vec<_>>());
             assert_eq!(
                 (sessions, window_stacks),
                 (
                     vec![
-                        Vec::new(),
+                        ids(&[]),
                         ids(&["first"]),
                         ids(&["second", "first"]),
                         ids(&["downgraded"]),
@@ -284,6 +290,46 @@ mod tests {
                         Some(("other".to_owned(), vec![WindowId::from(7u64)])),
                         Some(("sixth".to_owned(), vec![WindowId::from(7u64)])),
                     ],
+                )
+            );
+        });
+    }
+
+    #[test]
+    fn test_unreadable_session_metadata_is_left_untouched() {
+        gpui::block_on(async {
+            let db = KeyValueStore::open_test_db("unreadable-session-metadata").await;
+            for session_id in ["first", "second"] {
+                Session::new(session_id.to_owned(), db.clone()).await;
+            }
+            let stored_session_ids = db.read_kvp(RESTORABLE_SESSION_IDS_KEY).unwrap().unwrap();
+            db.write(|connection| {
+                connection.exec(&format!(
+                    "UPDATE kv_store SET value = CAST(X'FF' AS TEXT) WHERE key = '{RESTORABLE_SESSION_IDS_KEY}'"
+                ))?()
+            })
+            .await
+            .unwrap();
+
+            let unreadable = Session::new("third".to_owned(), db.clone()).await;
+            let stored_session_id_while_unreadable = db.read_kvp(SESSION_ID_KEY).unwrap();
+            db.write_kvp(RESTORABLE_SESSION_IDS_KEY.to_owned(), stored_session_ids)
+                .await
+                .unwrap();
+            let recovered = Session::new("fourth".to_owned(), db.clone()).await;
+
+            assert_eq!(
+                (
+                    unreadable.restorable_session_ids,
+                    unreadable.old_session_id,
+                    stored_session_id_while_unreadable,
+                    recovered.restorable_session_ids,
+                ),
+                (
+                    None,
+                    None,
+                    Some("second".to_owned()),
+                    Some(vec!["second".to_owned(), "first".to_owned()]),
                 )
             );
         });

@@ -427,7 +427,7 @@ pub trait SerializableItem: Item {
 
     fn serialize(
         &mut self,
-        workspace: &mut Workspace,
+        workspace_id: Option<WorkspaceId>,
         item_id: ItemId,
         closing: bool,
         cx: &mut Context<Self>,
@@ -437,11 +437,11 @@ pub trait SerializableItem: Item {
 }
 
 pub trait SerializableItemHandle: ItemHandle {
-    fn serialized_item_kind(&self) -> &'static str;
+    fn serialized_item_kind(&self, cx: &App) -> SharedString;
     fn persistent_item_id(&self, cx: &mut App) -> ItemId;
     fn serialize(
         &self,
-        workspace: &mut Workspace,
+        workspace_id: Option<WorkspaceId>,
         closing: bool,
         cx: &mut App,
     ) -> Option<Task<Result<()>>>;
@@ -452,8 +452,8 @@ impl<T> SerializableItemHandle for Entity<T>
 where
     T: SerializableItem,
 {
-    fn serialized_item_kind(&self) -> &'static str {
-        T::serialized_item_kind()
+    fn serialized_item_kind(&self, _cx: &App) -> SharedString {
+        SharedString::new_static(T::serialized_item_kind())
     }
 
     fn persistent_item_id(&self, cx: &mut App) -> ItemId {
@@ -462,13 +462,13 @@ where
 
     fn serialize(
         &self,
-        workspace: &mut Workspace,
+        workspace_id: Option<WorkspaceId>,
         closing: bool,
         cx: &mut App,
     ) -> Option<Task<Result<()>>> {
         let item_id = self.persistent_item_id(cx);
         self.update(cx, |this, cx| {
-            this.serialize(workspace, item_id, closing, cx)
+            this.serialize(workspace_id, item_id, closing, cx)
         })
     }
 
@@ -1463,6 +1463,10 @@ pub mod test {
 
     impl Global for FailingTestItemDeserialization {}
 
+    pub struct FailingTestItemSerialization;
+
+    impl Global for FailingTestItemSerialization {}
+
     pub struct TestProjectItem {
         pub entry_id: Option<ProjectEntryId>,
         pub project_path: Option<ProjectPath>,
@@ -1486,7 +1490,7 @@ pub mod test {
         pub nav_history: Option<ItemNavHistory>,
         pub tab_descriptions: Option<Vec<&'static str>>,
         pub tab_detail: Cell<Option<usize>>,
-        serialize: Option<Box<dyn Fn() -> Option<Task<anyhow::Result<()>>>>>,
+        serialize: Option<Box<dyn Fn(Option<WorkspaceId>) -> Option<Task<anyhow::Result<()>>>>>,
         focus_handle: gpui::FocusHandle,
         pub child_focus_handles: Vec<gpui::FocusHandle>,
     }
@@ -1633,8 +1637,15 @@ pub mod test {
         }
 
         pub fn with_serialize(
-            mut self,
+            self,
             serialize: impl Fn() -> Option<Task<anyhow::Result<()>>> + 'static,
+        ) -> Self {
+            self.with_serialize_to(move |_| serialize())
+        }
+
+        pub fn with_serialize_to(
+            mut self,
+            serialize: impl Fn(Option<WorkspaceId>) -> Option<Task<anyhow::Result<()>>> + 'static,
         ) -> Self {
             self.serialize = Some(Box::new(serialize));
             self
@@ -1919,13 +1930,16 @@ pub mod test {
 
         fn serialize(
             &mut self,
-            _workspace: &mut Workspace,
+            workspace_id: Option<WorkspaceId>,
             _item_id: ItemId,
             _closing: bool,
-            _cx: &mut Context<Self>,
+            cx: &mut Context<Self>,
         ) -> Option<Task<anyhow::Result<()>>> {
+            if cx.has_global::<FailingTestItemSerialization>() {
+                return Some(Task::ready(Err(anyhow::anyhow!("the disk is full"))));
+            }
             if let Some(serialize) = self.serialize.take() {
-                let result = serialize();
+                let result = serialize(workspace_id);
                 self.serialize = Some(serialize);
                 result
             } else {
