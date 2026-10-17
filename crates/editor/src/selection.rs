@@ -57,6 +57,31 @@ impl Editor {
         self.change_selections_with_history(effects, None, window, cx, change)
     }
 
+    pub(crate) fn settle_horizontal_goals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.selections.has_provisional_horizontal_goals() {
+            return;
+        }
+        let snapshot = self.display_snapshot(cx);
+        if !self.selections.has_unsettled_horizontal_goals(&snapshot) {
+            return;
+        }
+        let details = self.text_layout_details(window, cx);
+        self.selections.set_horizontal_layout_details(&details);
+        let history_mode = mem::replace(
+            &mut self.selection_history.mode,
+            SelectionHistoryMode::Skipping,
+        );
+        self.change_selections(
+            SelectionEffects::scroll(Autoscroll::newest())
+                .nav_history(false)
+                .completions(false),
+            window,
+            cx,
+            |_| {},
+        );
+        self.selection_history.mode = history_mode;
+    }
+
     /// Re-resolves selection anchors so they reference live buffer fragments.
     ///
     /// Deleted CRDT fragments remain as tombstones. An anchor associated with a
@@ -1082,12 +1107,7 @@ impl Editor {
                     SelectionEffects::scroll(Autoscroll::newest()),
                     window,
                     cx,
-                    |s| {
-                        s.select_anchors_unexpanded(
-                            entry.selections.to_vec(),
-                            entry.goal_origins.clone(),
-                        )
-                    },
+                    |s| s.select_anchors_unexpanded(entry.selections.to_vec()),
                 );
             });
             self.selection_history.mode = SelectionHistoryMode::Normal;
@@ -1112,12 +1132,7 @@ impl Editor {
                     SelectionEffects::scroll(Autoscroll::newest()),
                     window,
                     cx,
-                    |s| {
-                        s.select_anchors_unexpanded(
-                            entry.selections.to_vec(),
-                            entry.goal_origins.clone(),
-                        )
-                    },
+                    |s| s.select_anchors_unexpanded(entry.selections.to_vec()),
                 );
             });
             self.selection_history.mode = SelectionHistoryMode::Normal;
@@ -2082,7 +2097,6 @@ impl Editor {
     fn selection_history_entry(&self) -> SelectionHistoryEntry {
         SelectionHistoryEntry {
             selections: self.selections.disjoint_anchors_arc(),
-            goal_origins: self.selections.goal_origins(),
             select_next_state: self.select_next_state.clone(),
             select_prev_state: self.select_prev_state.clone(),
             add_selections_state: self.add_selections_state.clone(),

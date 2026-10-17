@@ -2329,12 +2329,17 @@ impl Editor {
         let scroll_anchor = self.scroll_manager.native_anchor(&display_snapshot, cx);
         let scroll_top_row = scroll_anchor.top_row(&buffer);
         drop(buffer);
+        let horizontal_scroll = self
+            .scroll_manager
+            .serialized_position(&display_snapshot, cx)
+            .horizontal;
 
         NavigationData {
             cursor_anchor,
             cursor_position,
             scroll_anchor,
             scroll_top_row,
+            horizontal_scroll,
         }
     }
 
