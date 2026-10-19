@@ -836,7 +836,7 @@ impl Fs for RealFs {
                 let target = target.to_path_buf();
                 match self
                     .executor
-                    .spawn(async move { rename_without_replace(&source, &target) })
+                    .spawn_blocking(move || rename_without_replace(&source, &target))
                     .await
                 {
                     Ok(()) => return Ok(()),
@@ -958,7 +958,7 @@ impl Fs for RealFs {
     async fn load(&self, path: &Path) -> Result<String> {
         let path = path.to_path_buf();
         self.executor
-            .spawn(async move {
+            .spawn_blocking(move || {
                 std::fs::read_to_string(&path)
                     .with_context(|| format!("Failed to read file {}", path.display()))
             })
@@ -969,7 +969,7 @@ impl Fs for RealFs {
         let path = path.to_path_buf();
         let bytes = self
             .executor
-            .spawn(async move { std::fs::read(path) })
+            .spawn_blocking(move || std::fs::read(path))
             .await?;
         Ok(bytes)
     }
@@ -1047,7 +1047,7 @@ impl Fs for RealFs {
         let path = path.to_owned();
         let contents = content.to_owned();
         self.executor
-            .spawn(async move {
+            .spawn_blocking(move || {
                 std::fs::write(path, contents)?;
                 Ok(())
             })
@@ -1057,7 +1057,7 @@ impl Fs for RealFs {
     async fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
         let path = path.to_owned();
         self.executor
-            .spawn(async move {
+            .spawn_blocking(move || {
                 #[cfg(target_os = "windows")]
                 let result = Self::canonicalize(&path);
 
@@ -1072,14 +1072,16 @@ impl Fs for RealFs {
     async fn is_file(&self, path: &Path) -> bool {
         let path = path.to_owned();
         self.executor
-            .spawn(async move { std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) })
+            .spawn_blocking(move || {
+                std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
+            })
             .await
     }
 
     async fn is_dir(&self, path: &Path) -> bool {
         let path = path.to_owned();
         self.executor
-            .spawn(async move { std::fs::metadata(path).is_ok_and(|metadata| metadata.is_dir()) })
+            .spawn_blocking(move || std::fs::metadata(path).is_ok_and(|metadata| metadata.is_dir()))
             .await
     }
 
@@ -1087,7 +1089,7 @@ impl Fs for RealFs {
         let path_buf = path.to_owned();
         let symlink_metadata = match self
             .executor
-            .spawn(async move { std::fs::symlink_metadata(&path_buf) })
+            .spawn_blocking(move || std::fs::symlink_metadata(&path_buf))
             .await
         {
             Ok(metadata) => metadata,
@@ -1105,7 +1107,7 @@ impl Fs for RealFs {
             // Read target metadata, if the target exists
             match self
                 .executor
-                .spawn(async move { std::fs::metadata(path_buf) })
+                .spawn_blocking(move || std::fs::metadata(path_buf))
                 .await
             {
                 Ok(target_metadata) => target_metadata,
@@ -1146,7 +1148,7 @@ impl Fs for RealFs {
         #[cfg(windows)]
         let is_executable = self
             .executor
-            .spawn(async move { path_buf.is_executable() })
+            .spawn_blocking(move || path_buf.is_executable())
             .await;
 
         Ok(Some(Metadata {
@@ -1165,7 +1167,7 @@ impl Fs for RealFs {
         let path = path.to_owned();
         let path = self
             .executor
-            .spawn(async move { std::fs::read_link(&path) })
+            .spawn_blocking(move || std::fs::read_link(&path))
             .await?;
         Ok(path)
     }
@@ -1177,7 +1179,7 @@ impl Fs for RealFs {
         let path = path.to_owned();
         let entries = self
             .executor
-            .spawn(async move { read_dir_entries(path) })
+            .spawn_blocking(move || read_dir_entries(path))
             .await?;
         Ok(Box::pin(iter(entries)))
     }
@@ -1348,7 +1350,7 @@ impl Fs for RealFs {
         if load != UNINITIALIZED {
             return load == CASE_SENSITIVE;
         }
-        let temp_dir = self.executor.spawn(async { TempDir::new() });
+        let temp_dir = self.executor.spawn_blocking(TempDir::new);
         let res = maybe!(async {
             let temp_dir = temp_dir.await?;
             let test_file_1 = temp_dir.path().join("case_sensitivity_test.tmp");
@@ -1414,16 +1416,10 @@ impl Fs for RealFs {
 
         let restored_item_path = trashed_entry.original_parent.join(&trashed_entry.name);
 
-        let (tx, rx) = futures::channel::oneshot::channel();
-        std::thread::Builder::new()
-            .name("restore trashed item".to_string())
-            .spawn(move || {
-                let res = trash::restore_all([trashed_entry.into_trash_item()]);
-                tx.send(res)
-            })
-            .expect("The OS can spawn a threads");
+        self.executor
+            .spawn_blocking(move || trash::restore_all([trashed_entry.into_trash_item()]))
+            .await?;
 
-        rx.await.expect("Restore all never panics")?;
         self.trash.lock().remove(trash_id);
         Ok(restored_item_path)
     }
