@@ -1,0 +1,72 @@
+# Builds Bloo on GitHub's Apple-silicon runner, so the 8 GB laptop never has to.
+# Download the DMG from the run's "Artifacts" section.
+name: Bloo build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [mine]
+    paths-ignore:
+      - "bloo/**"
+      - "**.md"
+
+concurrency:
+  group: bloo-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bundle_mac_aarch64:
+    if: github.repository == 'Adityakhalkar/bloo'
+    runs-on: macos-15
+    timeout-minutes: 330
+    env:
+      CARGO_INCREMENTAL: 0
+      # The free runner has 7 GB of RAM. Thin LTO and full debug info make the final link
+      # swap heavily, and bundle-mac strips the debug info anyway.
+      CARGO_PROFILE_RELEASE_LTO: "off"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - name: Make room on the runner
+        run: |
+          df -h /
+          sudo rm -rf ~/Library/Android /usr/local/share/dotnet /usr/local/lib/android || true
+          df -h /
+
+      - name: Toolchain info
+        run: |
+          sw_vers
+          xcode-select -p
+          xcodebuild -version
+          rustup --version
+
+      - name: Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain || echo "Metal toolchain is bundled with this Xcode"
+
+      - name: Cache Rust toolchain, crates and build tools
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/cargo-bundle
+            ~/.cargo/bin/cargo-about
+          key: bloo-cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: bloo-cargo-${{ runner.os }}-
+
+      - name: Bundle
+        run: ./script/bundle-mac aarch64-apple-darwin
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Bloo-aarch64.dmg
+          path: target/aarch64-apple-darwin/release/Bloo-aarch64.dmg
+          if-no-files-found: error
+          retention-days: 30

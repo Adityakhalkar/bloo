@@ -205,7 +205,10 @@ function sign_app_binaries() {
     download_git "${target_triple}" "${app_path}/Contents/MacOS/git"
 
     # Note: The app identifier for our development builds is the same as the app identifier for nightly.
-    cp crates/zed/contents/$channel/embedded.provisionprofile "${app_path}/Contents/"
+    # Bloo: the profile is tied to Zed's team and bundle ids, so only embed it when signing as Zed.
+    if [[ $can_code_sign = true ]]; then
+        cp crates/zed/contents/$channel/embedded.provisionprofile "${app_path}/Contents/"
+    fi
 
     if [[ $can_code_sign = true ]]; then
         echo "Code signing binaries"
@@ -245,8 +248,8 @@ function sign_app_binaries() {
         open "$app_path"
     fi
 
-    if [[ "$target_dir" = "debug" ]]; then
-        echo "Debug build detected - skipping DMG creation and signing"
+    if [[ "$target_dir" = "debug" || "$local_install" = true ]]; then
+        echo "Debug build or local install - skipping DMG creation"
         if [ "$local_install" = false ]; then
             echo "Created application bundle:"
             echo "$app_path"
@@ -254,7 +257,7 @@ function sign_app_binaries() {
     else
         dmg_target_directory="target/${target_triple}/${target_dir}"
         dmg_source_directory="${dmg_target_directory}/dmg"
-        dmg_file_path="${dmg_target_directory}/Zed-${arch_suffix}.dmg"
+        dmg_file_path="${dmg_target_directory}/Bloo-${arch_suffix}.dmg"
         xcode_bin_dir_path="$(xcode-select -p)/usr/bin"
 
         rm -rf ${dmg_source_directory}
@@ -266,16 +269,19 @@ function sign_app_binaries() {
         ln -s /Applications ${dmg_source_directory}
 
         echo "Creating final DMG at ${dmg_file_path} using ${dmg_source_directory}"
-        hdiutil create -volname Zed -srcfolder "${dmg_source_directory}" -ov -format UDZO "${dmg_file_path}"
+        hdiutil create -volname Bloo -srcfolder "${dmg_source_directory}" -ov -format UDZO "${dmg_file_path}"
 
         # If someone runs this bundle script locally, a symlink will be placed in `dmg_source_directory`.
         # This symlink causes CPU issues with Zed if the Zed codebase is the project being worked on, so we simply remove it for now.
         echo "Removing symlink to /Applications from ${dmg_source_directory}"
         rm ${dmg_source_directory}/Applications
 
-        echo "Adding license agreement to DMG"
-        npm install --global dmg-license minimist
-        dmg-license script/terms/terms.json "${dmg_file_path}"
+        # Bloo: script/terms holds Zed Industries' terms, which don't apply to Bloo builds.
+        if [[ $can_code_sign = true ]]; then
+            echo "Adding license agreement to DMG"
+            npm install --global dmg-license minimist
+            dmg-license script/terms/terms.json "${dmg_file_path}"
+        fi
 
         if [[ $can_code_sign = true ]]; then
             echo "Notarizing DMG with Apple"
@@ -350,8 +356,11 @@ upload_debug_symbols
 # Sentry receives the extracted zed.dwarf, not the binary, so debug symbols
 # must be extracted before the binaries are stripped below. The .dwarf files
 # also keep symbols recoverable when the sentry upload is skipped.
-if [[ "$target_dir" == "release" && "$local_install" != true ]]; then
-    extract_debug_symbols
+# Bloo: local installs are stripped too, so the app in /Applications stays small.
+if [[ "$target_dir" == "release" ]]; then
+    if [[ "$local_install" != true ]]; then
+        extract_debug_symbols
+    fi
     strip -x "target/${target_triple}/${target_dir}/zed"
     strip -x "target/${target_triple}/${target_dir}/cli"
     strip -x "target/${target_triple}/${target_dir}/remote_server"

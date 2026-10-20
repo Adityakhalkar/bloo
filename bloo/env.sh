@@ -2,6 +2,10 @@
 # Tuned for an 8 GB M2: fewer parallel rustc jobs, lighter debug info.
 export CARGO_BUILD_JOBS=4
 export CARGO_PROFILE_DEV_DEBUG=line-tables-only
+# Release builds (script/bundle-mac): thin LTO and debug info make the final link swap on 8 GB,
+# and bundle-mac strips the debug info anyway. Costs a few percent of runtime speed.
+export CARGO_PROFILE_RELEASE_LTO=off
+export CARGO_PROFILE_RELEASE_DEBUG=0
 
 # webrtc-sys downloads a 243 MB prebuilt with a short HTTP timeout that fails on slow links.
 # Fetch it once with curl into ~/.cache/bloo and point the build at it:
