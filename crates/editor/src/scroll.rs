@@ -164,6 +164,38 @@ pub struct ScrollManager {
     forbid_vertical_scroll: bool,
     minimap_thumb_state: Option<ScrollbarThumbState>,
     _save_scroll_position_task: Task<()>,
+    jump: Option<ScrollJump>,
+}
+
+/// Bloo: a spring easing the view toward a navigation jump (go to definition, search result).
+/// The logical scroll position is already at the target; only painting reads the in-between
+/// value, so everything else keeps seeing the final state.
+#[derive(Clone, Copy, Debug)]
+struct ScrollJump {
+    started_at: std::time::Instant,
+    /// Offset from the target in rows, and its velocity, when the jump started.
+    initial: gpui::SpringState,
+    target_y: ScrollOffset,
+}
+
+/// Jumps shorter than this many rows (e.g. typing past the last visible line) stay instant.
+const MIN_ANIMATED_JUMP_ROWS: ScrollOffset = 3.0;
+/// Long jumps only animate their last stretch so the motion stays readable.
+const MAX_ANIMATED_JUMP_ROWS: ScrollOffset = 40.0;
+const JUMP_SETTLE_EPSILON_ROWS: f32 = 0.01;
+
+impl ScrollJump {
+    /// The presented scroll top and velocity at `now`, or `None` once the spring has settled.
+    fn state_at(&self, now: std::time::Instant) -> Option<(ScrollOffset, f32)> {
+        let spring = ui::motion::reposition_spring();
+        let elapsed = now.saturating_duration_since(self.started_at).as_secs_f32();
+        let state = spring.step(self.initial, 0.0, elapsed);
+        if spring.is_settled(state, 0.0, JUMP_SETTLE_EPSILON_ROWS) {
+            None
+        } else {
+            Some((self.target_y + ScrollOffset::from(state.position), state.velocity))
+        }
+    }
 }
 
 impl ScrollManager {
@@ -187,7 +219,41 @@ impl ScrollManager {
             forbid_vertical_scroll: false,
             minimap_thumb_state: None,
             _save_scroll_position_task: Task::ready(()),
+            jump: None,
         }
+    }
+
+    /// The scroll top to paint while a navigation jump is easing in, if one is.
+    pub(crate) fn presented_scroll_y(&self) -> Option<ScrollOffset> {
+        self.jump
+            .and_then(|jump| jump.state_at(std::time::Instant::now()))
+            .map(|(y, _)| y)
+    }
+
+    fn begin_jump(&mut self, from_y: ScrollOffset, to_y: ScrollOffset, reduce_motion: bool) {
+        let now = std::time::Instant::now();
+        // An interrupted jump continues from where it appears to be, keeping its velocity.
+        let in_flight = self.jump.and_then(|jump| jump.state_at(now));
+        let (from_y, velocity) = in_flight.unwrap_or((from_y, 0.0));
+        let distance = to_y - from_y;
+        // Tests assert on painted rows right after a jump, which a running spring would shift.
+        let in_tests = cfg!(any(test, feature = "test-support"));
+        if reduce_motion
+            || in_tests
+            || (in_flight.is_none() && distance.abs() < MIN_ANIMATED_JUMP_ROWS)
+        {
+            self.jump = None;
+            return;
+        }
+        let distance = distance.clamp(-MAX_ANIMATED_JUMP_ROWS, MAX_ANIMATED_JUMP_ROWS);
+        self.jump = Some(ScrollJump {
+            started_at: now,
+            initial: gpui::SpringState {
+                position: -distance as f32,
+                velocity,
+            },
+            target_y: to_y,
+        });
     }
 
     pub fn set_native_display_map_id(
@@ -401,6 +467,20 @@ impl ScrollManager {
         let current = self.anchor.read(cx);
         if current.scroll_anchor == adjusted_anchor {
             return WasScrolled(false);
+        }
+
+        if autoscroll {
+            let from_y = current.scroll_position(display_map).y;
+            let to_y = SharedScrollAnchor {
+                scroll_anchor: adjusted_anchor,
+                display_map_id: Some(display_map.display_map_id),
+            }
+            .scroll_position(display_map)
+            .y;
+            self.begin_jump(from_y, to_y, cx.reduce_motion());
+        } else {
+            // Direct scrolling takes over immediately; it starts from the presented position.
+            self.jump = None;
         }
 
         self.anchor.update(cx, |shared, _| {
@@ -653,7 +733,11 @@ impl Editor {
             delta.y = 0.0;
         }
         let display_map = self.display_map.update(cx, |map, cx| map.snapshot(cx));
-        let position = self.scroll_manager.scroll_position(&display_map, cx) + delta.map(f64::from);
+        let mut position = self.scroll_manager.scroll_position(&display_map, cx);
+        if let Some(presented_y) = self.scroll_manager.presented_scroll_y() {
+            position.y = presented_y;
+        }
+        let position = position + delta.map(f64::from);
         self.set_scroll_position_taking_display_map(position, true, false, display_map, window, cx);
     }
 
@@ -989,5 +1073,39 @@ impl Editor {
             };
             self.set_scroll_anchor(scroll_anchor, window, cx);
         }
+    }
+}
+
+#[cfg(test)]
+mod scroll_jump_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn jump_eases_from_start_to_target_without_overshoot() {
+        let started_at = Instant::now();
+        let jump = ScrollJump {
+            started_at,
+            initial: gpui::SpringState {
+                position: -20.0,
+                velocity: 0.0,
+            },
+            target_y: 100.0,
+        };
+
+        let (start_y, _) = jump.state_at(started_at).expect("jump is running at start");
+        assert!((start_y - 80.0).abs() < 1e-3);
+
+        let mut previous_y = start_y;
+        for millis in (20..400).step_by(20) {
+            let Some((y, _)) = jump.state_at(started_at + Duration::from_millis(millis)) else {
+                break;
+            };
+            assert!(y >= previous_y, "critically damped jumps move one way");
+            assert!(y <= 100.0, "critically damped jumps never overshoot");
+            previous_y = y;
+        }
+
+        assert!(jump.state_at(started_at + Duration::from_secs(2)).is_none());
     }
 }

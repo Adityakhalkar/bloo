@@ -1,6 +1,6 @@
 use gpui::{
-    AnyView, App, DismissEvent, Entity, EventEmitter, FocusHandle, Global, ManagedView,
-    MouseButton, Subscription, WeakFocusHandle,
+    AnimationExt as _, AnyView, App, DismissEvent, ElementId, Entity, EventEmitter, FocusHandle,
+    Global, ManagedView, MouseButton, Subscription, WeakFocusHandle,
 };
 use ui::prelude::*;
 
@@ -295,6 +295,13 @@ impl Render for ModalLayer {
             return active_modal.modal.view().into_any_element();
         }
 
+        let modal_view = active_modal.modal.view();
+        // Bloo: each modal drifts down into place from the title bar side as it fades in.
+        let entrance_id = ElementId::NamedInteger(
+            "bloo-modal-entrance".into(),
+            modal_view.entity_id().as_u64(),
+        );
+
         div()
             .absolute()
             .size_full()
@@ -320,10 +327,18 @@ impl Render for ModalLayer {
                     .child(
                         h_flex()
                             .occlude()
-                            .child(active_modal.modal.view())
+                            .child(modal_view)
                             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                 cx.stop_propagation();
-                            }),
+                            })
+                            .with_animation(
+                                entrance_id,
+                                ui::motion::enter_animation(),
+                                |this, delta| {
+                                    this.opacity(delta)
+                                        .mt(px(-ui::motion::enter_offset(delta)))
+                                },
+                            ),
                     ),
             )
             .into_any_element()

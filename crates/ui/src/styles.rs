@@ -1,5 +1,6 @@
 pub mod animation;
 mod appearance;
+pub mod motion;
 mod color;
 mod elevation;
 mod platform;

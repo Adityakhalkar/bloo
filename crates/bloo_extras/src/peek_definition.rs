@@ -8,7 +8,10 @@ use editor::{
     hover_links::HoverLink,
     scroll::Autoscroll,
 };
-use gpui::{App, Context, Entity, Focusable as _, Subscription, WeakEntity, Window, actions};
+use gpui::{
+    AnimationExt as _, App, Context, ElementId, Entity, Focusable as _, Subscription, WeakEntity,
+    Window, actions,
+};
 use language::{Capability, Location, ToPoint as _};
 use project::{LocationLink, Project};
 use ui::prelude::*;
@@ -335,8 +338,13 @@ impl Render for PeekView {
             "⌘↵ open · esc close"
         };
 
+        let entrance_id = ElementId::NamedInteger(
+            "bloo-peek-entrance".into(),
+            cx.entity_id().as_u64(),
+        );
         v_flex()
             .key_context("PeekDefinition")
+            .relative()
             .size_full()
             .border_y_1()
             .border_color(colors.border)
@@ -366,5 +374,14 @@ impl Render for PeekView {
                     ),
             )
             .child(div().flex_1().min_h_0().child(self.editor.clone()))
+            // Unfolds downward from the line it was opened on.
+            .with_animation(
+                entrance_id,
+                ui::motion::enter_animation(),
+                |this, delta| {
+                    this.opacity(delta)
+                        .top(px(-ui::motion::enter_offset(delta)))
+                },
+            )
     }
 }

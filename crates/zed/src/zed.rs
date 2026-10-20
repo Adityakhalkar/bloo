@@ -2075,7 +2075,9 @@ impl Settings for ReduceMotionSetting {
 
 fn init_reduce_motion(cx: &mut App) {
     let apply = |cx: &mut App| {
-        let reduce_motion = ReduceMotionSetting::get_global(cx).0 == settings::ReduceMotionMode::On;
+        // Bloo: macOS's Reduce motion also turns animations off, not only Zed's own setting.
+        let reduce_motion = ReduceMotionSetting::get_global(cx).0 == settings::ReduceMotionMode::On
+            || bloo_extras::system_prefers_reduced_motion();
         cx.set_reduce_motion(reduce_motion);
     };
     apply(cx);

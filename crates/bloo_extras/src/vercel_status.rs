@@ -4,7 +4,10 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, anyhow};
-use gpui::{App, AsyncApp, Context, Empty, Entity, Subscription, Task, WeakEntity, Window};
+use gpui::{
+    Animation, AnimationExt as _, App, AsyncApp, Context, ElementId, Empty, Entity, Subscription,
+    Task, WeakEntity, Window, pulsating_between,
+};
 use project::{
     Project,
     git_store::{GitStoreEvent, RepositoryEvent},
@@ -330,16 +333,44 @@ impl Render for VercelStatus {
                     label.push_str(&format!(" · {branch}"));
                 }
 
+                let triangle = Label::new("▲")
+                    .size(LabelSize::Small)
+                    .color(deployment.state.color());
+                let triangle = if deployment.state.is_in_progress() {
+                    // A slow breath while Vercel is still building.
+                    triangle
+                        .with_animation(
+                            "vercel-building",
+                            Animation::new(Duration::from_millis(1400))
+                                .repeat()
+                                .with_easing(pulsating_between(0.35, 1.0)),
+                            |label, delta| label.alpha(delta),
+                        )
+                        .into_any_element()
+                } else {
+                    triangle.into_any_element()
+                };
+                // A new deployment or state change rises in, so the change is noticed.
+                let change_id = ElementId::NamedInteger(
+                    SharedString::from(format!("vercel-state-{}", deployment.state.label())),
+                    deployment.created,
+                );
+
                 ButtonLike::new("vercel-status")
                     .child(
                         h_flex()
+                            .relative()
                             .gap_1()
-                            .child(
-                                Label::new("▲")
-                                    .size(LabelSize::Small)
-                                    .color(deployment.state.color()),
-                            )
-                            .child(Label::new(label).size(LabelSize::Small)),
+                            .child(triangle)
+                            .child(Label::new(label).size(LabelSize::Small))
+                            .with_animation(
+                                change_id,
+                                ui::motion::enter_animation(),
+                                |this, delta| {
+                                    this.opacity(delta)
+                                        .top(px(ui::motion::enter_offset(delta) / 2.0))
+                                },
+                            ),
                     )
                     .tooltip(move |_, cx| Tooltip::with_meta(title.clone(), None, meta.clone(), cx))
                     .on_click(move |_, _, cx| cx.open_url(&open_url))

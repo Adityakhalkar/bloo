@@ -33,5 +33,9 @@ util.workspace = true
 workspace.workspace = true
 zstd.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-app-kit.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true

@@ -6926,11 +6926,22 @@ impl Workspace {
                     .flex_col()
                     .justify_end()
                     .gap_2()
-                    .children(
-                        self.notifications
-                            .iter()
-                            .map(|(_, notification)| notification.clone().into_any_element()),
-                    ),
+                    .children(self.notifications.iter().map(|(_, notification)| {
+                        // Bloo: notifications rise into place from the bottom edge.
+                        gpui::AnimationExt::with_animation(
+                            div().relative().child(notification.clone()),
+                            gpui::ElementId::NamedInteger(
+                                "bloo-notification-entrance".into(),
+                                notification.entity_id().as_u64(),
+                            ),
+                            ui::motion::enter_animation(),
+                            |this, delta| {
+                                this.opacity(delta)
+                                    .top(gpui::px(ui::motion::enter_offset(delta)))
+                            },
+                        )
+                        .into_any_element()
+                    })),
             )
         }
     }

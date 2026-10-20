@@ -8,7 +8,8 @@ use client::proto;
 use db::kvp::KeyValueStore;
 
 use gpui::{
-    Action, Anchor, AnyView, App, Axis, Context, Entity, EntityId, EventEmitter, FocusHandle,
+    Action, AnimationExt as _, Anchor, AnyView, App, Axis, Context, ElementId, Entity, EntityId,
+    EventEmitter, FocusHandle,
     Focusable, IntoElement, KeyContext, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement,
     Render, SharedString, StyleRefinement, Styled, Subscription, WeakEntity, Window, deferred, div,
     px,
@@ -1351,9 +1352,11 @@ impl Render for Dock {
                     DockPosition::Right => this.border_l_1(),
                     DockPosition::Bottom => this.border_t_1(),
                 })
-                .child(
+                .child({
+                    let position = self.position();
                     div()
-                        .map(|this| match self.position().axis() {
+                        .relative()
+                        .map(|this| match position.axis() {
                             Axis::Horizontal => this.w_full().h_full(),
                             Axis::Vertical => this.h_full().w_full(),
                         })
@@ -1362,8 +1365,26 @@ impl Render for Dock {
                                 .panel
                                 .to_any()
                                 .cached(StyleRefinement::default().v_flex().size_full()),
-                        ),
-                )
+                        )
+                        // Bloo: panel content slides in from the dock's own edge and fades up,
+                        // replaying whenever the dock opens or switches panels.
+                        .with_animation(
+                            ElementId::NamedInteger(
+                                "bloo-dock-entrance".into(),
+                                entry.panel.panel_id().as_u64(),
+                            ),
+                            ui::motion::enter_animation(),
+                            move |this, delta| {
+                                let offset = px(ui::motion::enter_offset(delta));
+                                let this = this.opacity(delta);
+                                match position {
+                                    DockPosition::Left => this.left(-offset),
+                                    DockPosition::Right => this.left(offset),
+                                    DockPosition::Bottom => this.top(offset),
+                                }
+                            },
+                        )
+                })
                 .when(self.resizable(cx), |this| {
                     this.child(create_resize_handle())
                 })

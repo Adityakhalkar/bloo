@@ -22,6 +22,19 @@ Designs below came from read-only research at upstream `2c626b3397` (2026-10-20)
   - `file_history`: snapshot on every save incl. agent saves; `file_history: show file history`
     picker, Enter = diff, ⌘↵ = restore (design §5). No global size cap yet; per-file limits only.
 - `assets/keymaps/bloo.json`, loaded last in `zed::load_default_keymap`.
+- Motion (Apple-style; all off when Zed's `reduce_motion` setting or macOS Reduce motion is on):
+  - Tokens in `crates/ui/src/styles/motion.rs`: `apple_spring(response, damping_ratio)`,
+    `reposition_spring()` (0.32 s, no overshoot), 180 ms ease-out-quint entrances drifting 8 px.
+  - Smooth navigation jumps: `editor/src/scroll.rs` `ScrollJump` springs the *painted* scroll top
+    toward autoscroll targets ≥ 3 rows (only the last 40 rows of long jumps animate). Trackpad and
+    wheel input cancel it and continue from the presented position. Disabled under `test-support`.
+    Paint hook: one block in `editor/src/element.rs` after `snapshot.scroll_position()`.
+  - Entrances: modals (`workspace/src/modal_layer.rs`), dock panel content (`dock.rs`),
+    notifications (`workspace.rs` `render_notifications`), peek definition, Vercel status changes.
+  - Cursor glide on by default (`assets/settings/default.json` `cursor_animation.enabled`).
+  - macOS Reduce motion is read at startup and on settings changes (`zed.rs` `init_reduce_motion`).
+    Toggling it in System Settings while Bloo runs needs a settings change or restart to apply.
+  - Not done: exit animations (GPUI drops the element immediately), page up/down easing.
 - Not yet verified in a running app: everything in `bloo_extras` (needs the full Xcode build).
 
 ## 1. Vercel deploy status (status bar) — crate `bloo_extras::vercel_status`, ~250 LOC

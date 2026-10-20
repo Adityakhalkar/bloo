@@ -8747,6 +8747,12 @@ impl Element for EditorElement {
                     });
 
                     let mut scroll_position = snapshot.scroll_position();
+                    if let Some(presented_y) =
+                        self.editor.read(cx).scroll_manager.presented_scroll_y()
+                    {
+                        scroll_position.y = presented_y;
+                        window.request_animation_frame();
+                    }
                     if !line_height.is_zero() {
                         scroll_position.y = window
                             .pixel_snap_f64(scroll_position.y * f64::from(line_height))
