@@ -2378,6 +2378,11 @@ pub fn load_default_keymap(cx: &mut App) {
         )
         .unwrap(),
     );
+
+    // Bloo: fork-only bindings live in their own file so upstream keymap changes rebase cleanly.
+    cx.bind_keys(
+        KeymapFile::load_asset("keymaps/bloo.json", Some(KeybindSource::Default), cx).unwrap(),
+    );
 }
 
 /// Namespaces of actions that are part of an AI feature. When the user opts out
@@ -5938,6 +5943,7 @@ mod tests {
                 "highlights_tree_view",
                 "icon_theme_selector",
                 "image_viewer",
+                "file_history",
                 "inline_assistant",
                 "journal",
                 "keymap_editor",
@@ -5956,6 +5962,7 @@ mod tests {
                 "outline",
                 "outline_panel",
                 "pane",
+                "peek_definition",
                 "picker",
                 "project_panel",
                 "project_search",

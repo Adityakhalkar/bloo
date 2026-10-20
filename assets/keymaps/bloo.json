@@ -1,0 +1,18 @@
+// Bloo-only key bindings. Loaded after the default keymap, so these win over upstream defaults.
+[
+  {
+    "context": "Editor && mode == full",
+    "bindings": {
+      // Same key as VS Code's Peek Definition. Replaces Zed's go-to-definition-in-split here.
+      "alt-f12": "peek_definition::PeekDefinition"
+    }
+  },
+  {
+    "context": "PeekDefinition > Editor",
+    "bindings": {
+      "cmd-enter": "peek_definition::OpenPeekedDefinition",
+      "f4": "peek_definition::NextPeekResult",
+      "shift-f4": "peek_definition::PreviousPeekResult"
+    }
+  }
+]

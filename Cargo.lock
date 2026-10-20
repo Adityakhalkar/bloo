@@ -2344,6 +2344,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "bloo_extras"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clock",
+ "collections",
+ "editor",
+ "git_ui_core",
+ "gpui",
+ "hex",
+ "language",
+ "paths",
+ "picker",
+ "project",
+ "serde",
+ "serde_json",
+ "sha2",
+ "smol",
+ "tempfile",
+ "ui",
+ "util",
+ "workspace",
+ "zstd 0.13.3",
+]
+
+[[package]]
 name = "bmrng"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -22581,6 +22607,7 @@ dependencies = [
  "audio",
  "auto_update",
  "auto_update_ui",
+ "bloo_extras",
  "breadcrumbs",
  "call",
  "call_hierarchy",

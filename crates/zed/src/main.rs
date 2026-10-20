@@ -742,6 +742,7 @@ fn main() {
         tab_switcher::init(cx);
         outline::init(cx);
         call_hierarchy::init(cx);
+        bloo_extras::init(cx);
         project_symbols::init(cx);
         project_panel::init(cx);
         outline_panel::init(cx);
