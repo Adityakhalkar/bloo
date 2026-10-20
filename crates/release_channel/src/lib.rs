@@ -199,16 +199,17 @@ impl ReleaseChannel {
 
     /// Returns whether we want to poll for updates for this [`ReleaseChannel`]
     pub fn poll_for_updates(&self) -> bool {
-        !matches!(self, ReleaseChannel::Dev)
+        // Bloo: zed.dev's update server would replace this build with stock Zed.
+        false
     }
 
     /// Returns the display name for this [`ReleaseChannel`].
     pub fn display_name(&self) -> &'static str {
         match self {
-            ReleaseChannel::Dev => "Zed Dev",
-            ReleaseChannel::Nightly => "Zed Nightly",
-            ReleaseChannel::Preview => "Zed Preview",
-            ReleaseChannel::Stable => "Zed",
+            ReleaseChannel::Dev => "Bloo Dev",
+            ReleaseChannel::Nightly => "Bloo Nightly",
+            ReleaseChannel::Preview => "Bloo Preview",
+            ReleaseChannel::Stable => "Bloo",
         }
     }
 
@@ -227,10 +228,10 @@ impl ReleaseChannel {
     /// This also has to match the bundle identifier for Zed on macOS.
     pub fn app_id(&self) -> &'static str {
         match self {
-            ReleaseChannel::Dev => "dev.zed.Zed-Dev",
-            ReleaseChannel::Nightly => "dev.zed.Zed-Nightly",
-            ReleaseChannel::Preview => "dev.zed.Zed-Preview",
-            ReleaseChannel::Stable => "dev.zed.Zed",
+            ReleaseChannel::Dev => "dev.bloo.Bloo-Dev",
+            ReleaseChannel::Nightly => "dev.bloo.Bloo-Nightly",
+            ReleaseChannel::Preview => "dev.bloo.Bloo-Preview",
+            ReleaseChannel::Stable => "dev.bloo.Bloo",
         }
     }
 
