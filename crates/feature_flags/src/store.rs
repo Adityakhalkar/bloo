@@ -103,7 +103,8 @@ impl FeatureFlagStore {
     /// Debug builds are always treated as staff, and `ZED_DISABLE_STAFF`
     /// forces the user to be treated as non-staff for testing.
     pub fn overrides_enabled(&self) -> bool {
-        (cfg!(debug_assertions) || self.staff) && !*ZED_DISABLE_STAFF
+        // Bloo: the fork's user is its only "staff", so honor overrides in release builds too.
+        !*ZED_DISABLE_STAFF
     }
 
     pub fn server_flags_received(&self) -> bool {
