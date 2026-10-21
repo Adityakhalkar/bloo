@@ -1,11 +1,13 @@
 //! Bloo-only features, kept in one crate so the fork touches as few upstream files as possible.
 
 mod file_history;
+mod migration;
 mod peek_definition;
 mod system_motion;
 mod vercel_status;
 
-pub use file_history::ShowFileHistory;
+pub use file_history::{RewindAgentChanges, ShowFileHistory};
+pub use migration::migrate_from_zed;
 pub use peek_definition::{
     NextPeekResult, OpenPeekedDefinition, PeekDefinition, PreviousPeekResult,
 };

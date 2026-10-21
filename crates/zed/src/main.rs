@@ -280,6 +280,11 @@ fn main() {
         }
     }
 
+    // Bloo: bring over a Zed setup before Bloo's own folders are created.
+    if args.user_data_dir.is_none() {
+        bloo_extras::migrate_from_zed();
+    }
+
     let file_errors = init_paths();
     if !file_errors.is_empty() {
         files_not_created_on_launch(file_errors);

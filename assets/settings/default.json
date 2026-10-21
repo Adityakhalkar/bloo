@@ -625,13 +625,14 @@
     // Whether to show the project host and name in the titlebar.
     "show_project_items": true,
     // Whether to show onboarding banners in the titlebar.
-    "show_onboarding_banner": true,
+    "show_onboarding_banner": false,
     // Whether to show user picture in the titlebar.
     "show_user_picture": true,
     // Whether to show the user menu in the titlebar.
     "show_user_menu": true,
     // Whether to show the sign in button in the titlebar.
-    "show_sign_in": true,
+    // Bloo: no Zed account needed, so no sign-in button.
+    "show_sign_in": false,
     // Whether to show the menus in the titlebar.
     "show_menus": false,
     // Whether to open the menus in the titlebar on hover.
@@ -1071,7 +1072,8 @@
   },
   "collaboration_panel": {
     // Whether to show the collaboration panel button in the status bar.
-    "button": true,
+    // Bloo: collaboration runs on Zed's servers, so it's hidden by default.
+    "button": false,
     // Where to dock the collaboration panel. Can be 'left' or 'right'.
     "dock": "right",
     // Default width of the collaboration panel.
@@ -1416,7 +1418,7 @@
     "show_merge_conflict_indicator": true,
   },
   // Whether the screen sharing icon is shown in the os status bar.
-  "show_call_status_icon": true,
+  "show_call_status_icon": false,
   // Whether to use language servers to provide code intelligence.
   "enable_language_server": true,
   // Whether to perform linked edits of associated ranges, if the language server supports it.
@@ -1711,9 +1713,11 @@
   // Control what info is collected by Zed.
   "telemetry": {
     // Send debug info like crash reports.
-    "diagnostics": true,
+    // Bloo: off by default; it would go to Zed's servers.
+    "diagnostics": false,
     // Send anonymized usage data like what languages you're using Zed with.
-    "metrics": true,
+    // Bloo: off by default; it would go to Zed's servers.
+    "metrics": false,
     // Allow sending requests to Anthropic models that cannot be offered with
     // Zero Data Retention
     "anthropic_retention": false,
@@ -1919,7 +1923,8 @@
   "load_direnv": "direct",
   "edit_predictions": {
     // Which edit prediction provider to use.
-    "provider": "zed",
+    // Bloo: Zed's hosted model needs a Zed account; choose "copilot", "ollama" or another provider.
+    "provider": "none",
     // Disable edit predictions for files matching these glob patterns.
     //
     // Use `"..."` to add patterns without repeating Zed's defaults. In project
